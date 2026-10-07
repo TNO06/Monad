@@ -1,5 +1,5 @@
 import React from 'react';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import { HashRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import PayerApp from './Payer';
 import MerchantApp from './Merchant';
 import { Smartphone, ScanLine } from 'lucide-react';

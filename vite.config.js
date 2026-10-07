@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
-  base: './', // Ensures all assets use relative paths (fixes GitHub Pages 404)
+  base: '/Monad/', // Ensures all assets use the correct repository path for GitHub Pages
   plugins: [
     react(),
     tailwindcss(),
