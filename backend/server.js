@@ -30,30 +30,112 @@ app.use((req, res, next) => {
 });
 
 // Simple in-memory database for hackathon simulation
+let users = {}; // username -> { password, address, privateKey, role }
 let wallets = {}; // address -> balance
 let allowances = {}; // address -> lockedAmount
 
-// Endpoint to create/get an account
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "monadadmin";
+
+// Create an admin user by default for testing
+const adminWallet = ethers.Wallet.createRandom();
+users["admin"] = { password: "password", address: adminWallet.address, privateKey: adminWallet.privateKey, role: "admin" };
+wallets[adminWallet.address] = 999999;
+allowances[adminWallet.address] = 0;
+
+// Endpoint to register a new user
+app.post("/api/register", (req, res) => {
+  const { username, password } = req.body;
+  if (!username || !password) return res.status(400).json({ error: "Username and password required" });
+  if (users[username]) return res.status(400).json({ error: "Username already exists" });
+
+  const wallet = ethers.Wallet.createRandom();
+  users[username] = {
+    password,
+    address: wallet.address,
+    privateKey: wallet.privateKey,
+    role: "user"
+  };
+  
+  wallets[wallet.address] = 0; // Starts with 0. Admin must fund.
+  allowances[wallet.address] = 0;
+
+  return res.json({ success: true, message: "Account created successfully!" });
+});
+
+// Endpoint to login
+app.post("/api/login", (req, res) => {
+  const { username, password } = req.body;
+  const user = users[username];
+  
+  if (!user || user.password !== password) {
+    return res.status(401).json({ error: "Invalid username or password" });
+  }
+
+  return res.json({ 
+    success: true, 
+    address: user.address, 
+    privateKey: user.privateKey,
+    role: user.role
+  });
+});
+
+// Endpoint to get account details (balance & allowance)
 app.post("/api/account", (req, res) => {
   const { address } = req.body;
   if (!address) return res.status(400).json({ error: "Address required" });
-  
-  if (wallets[address] === undefined) {
-    wallets[address] = 100; // New users get 100 fake Monad/USD
-    allowances[address] = 0;
-  }
-  return res.json({ balance: wallets[address], locked: allowances[address] || 0 });
+  return res.json({ balance: wallets[address] || 0, locked: allowances[address] || 0 });
 });
 
-// Endpoint to add/reduce balance
-app.post("/api/fund", (req, res) => {
-  const { address, amount } = req.body;
-  if (wallets[address] !== undefined) {
-    wallets[address] += Number(amount);
-    if (wallets[address] < 0) wallets[address] = 0; // Prevent negative balances
-  }
-  return res.json({ balance: wallets[address] });
+// --- ADMIN ENDPOINTS ---
+
+// Get all users
+app.post("/api/admin/users", (req, res) => {
+  const { adminPassword } = req.body;
+  if (adminPassword !== ADMIN_PASSWORD) return res.status(401).json({ error: "Unauthorized" });
+
+  const userList = Object.keys(users).map(username => {
+    const u = users[username];
+    return {
+      username,
+      address: u.address,
+      balance: wallets[u.address],
+      locked: allowances[u.address],
+      role: u.role
+    };
+  });
+
+  return res.json({ success: true, users: userList });
 });
+
+// Fund a user (Admin only)
+app.post("/api/admin/fund", (req, res) => {
+  const { adminPassword, username, amount } = req.body;
+  if (adminPassword !== ADMIN_PASSWORD) return res.status(401).json({ error: "Unauthorized" });
+  
+  const user = users[username];
+  if (!user) return res.status(404).json({ error: "User not found" });
+
+  wallets[user.address] = Number(amount);
+  return res.json({ success: true, newBalance: wallets[user.address] });
+});
+
+// Delete a user (Admin only)
+app.post("/api/admin/delete", (req, res) => {
+  const { adminPassword, username } = req.body;
+  if (adminPassword !== ADMIN_PASSWORD) return res.status(401).json({ error: "Unauthorized" });
+  
+  const user = users[username];
+  if (!user) return res.status(404).json({ error: "User not found" });
+  
+  // Clean up
+  delete wallets[user.address];
+  delete allowances[user.address];
+  delete users[username];
+  
+  return res.json({ success: true });
+});
+
+// --- PAYMENT ENDPOINTS ---
 
 // Endpoint to lock allowance for offline use
 app.post("/api/lock", (req, res) => {
@@ -74,8 +156,6 @@ app.post("/api/unlock", (req, res) => {
   const { address, remainingAmount } = req.body;
   
   if (allowances[address] !== undefined) {
-    // In a real system, the contract determines the exact remaining amount after settlement.
-    // For this simulation, we refund what the user claims they didn't spend.
     wallets[address] += Number(remainingAmount);
     allowances[address] = 0;
     return res.json({ success: true, balance: wallets[address] });
@@ -100,25 +180,22 @@ app.post("/api/settle", async (req, res) => {
 
     let totalSettled = 0;
 
-    // Process each voucher
     for (const v of batch) {
       const payer = v.payerAddress;
       const amount = Number(v.amount);
       
-      // If they have locked allowance, deduct from it
       if (allowances[payer] !== undefined && allowances[payer] >= amount) {
         allowances[payer] -= amount;
         totalSettled += amount;
       }
     }
 
-    // Credit the merchant
     if (wallets[merchantAddress] === undefined) wallets[merchantAddress] = 0;
     wallets[merchantAddress] += totalSettled;
 
     return res.json({ 
       success: true, 
-      txHash: "0x" + Math.random().toString(16).slice(2, 66), // Fake tx hash
+      txHash: "0x" + Math.random().toString(16).slice(2, 66),
       message: `Successfully settled batch. Total processed: $${totalSettled} added to your account!`
     });
 

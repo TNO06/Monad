@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { WifiOff, Wifi, CheckCircle2, AlertCircle, ScanLine, Send, Layers, X, Key, Wallet } from 'lucide-react';
+import { WifiOff, Wifi, CheckCircle2, AlertCircle, ScanLine, Send, Layers, X, Key, Wallet, User, Lock, Activity } from 'lucide-react';
 import { ethers } from 'ethers';
 import { Scanner } from '@yudiel/react-qr-scanner';
 
@@ -7,9 +7,14 @@ const BACKEND_URL = import.meta.env.PROD ? "https://monad-b768.onrender.com" : "
 
 export default function MerchantApp() {
   const [merchantWallet, setMerchantWallet] = useState(null);
-  const [privateKeyInput, setPrivateKeyInput] = useState("");
-  const [balance, setBalance] = useState(0);
+  
+  // Auth state
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [isRegistering, setIsRegistering] = useState(false);
+  const [authLoading, setAuthLoading] = useState(false);
 
+  const [balance, setBalance] = useState(0);
   const [merchantBatch, setMerchantBatch] = useState([]);
   const [settlementStatus, setSettlementStatus] = useState('idle');
   const [scanStatus, setScanStatus] = useState('idle');
@@ -37,17 +42,34 @@ export default function MerchantApp() {
     }
   };
 
-  const createRandomWallet = () => {
-    const wallet = ethers.Wallet.createRandom();
-    setMerchantWallet(wallet);
-  };
-
-  const loginWithKey = () => {
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    setAuthLoading(true);
+    const endpoint = isRegistering ? "/api/register" : "/api/login";
+    
     try {
-      const wallet = new ethers.Wallet(privateKeyInput);
-      setMerchantWallet(wallet);
+      const res = await fetch(`${BACKEND_URL}${endpoint}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      
+      if (data.success) {
+        if (isRegistering) {
+          alert("Account created! Please log in.");
+          setIsRegistering(false);
+        } else {
+          const wallet = new ethers.Wallet(data.privateKey);
+          setMerchantWallet(wallet);
+        }
+      } else {
+        alert(data.error);
+      }
     } catch (e) {
-      alert("Invalid Private Key!");
+      alert("Authentication failed. Check connection.");
+    } finally {
+      setAuthLoading(false);
     }
   };
 
@@ -96,22 +118,18 @@ export default function MerchantApp() {
 
   const settleBatch = async () => {
     if (merchantBatch.length === 0) return;
-
     setSettlementStatus('processing');
-
     try {
       const response = await fetch(`${BACKEND_URL}/api/settle`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ batch: merchantBatch, merchantAddress: merchantWallet.address })
       });
-
       const data = await response.json();
-
       if (data.success) {
         setMerchantBatch([]);
         setSettlementStatus('success');
-        fetchBalance(); // Refresh balance after settling!
+        fetchBalance(); 
         setTimeout(() => setSettlementStatus('idle'), 3000);
       } else {
         setSettlementStatus('error');
@@ -125,86 +143,115 @@ export default function MerchantApp() {
 
   if (!merchantWallet) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 font-sans p-4 flex flex-col items-center justify-center">
-        <div className="max-w-md w-full bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-xl">
-          <h2 className="text-2xl font-bold mb-6 text-center bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent">Merchant Login</h2>
-          <button onClick={createRandomWallet} className="w-full bg-purple-600 hover:bg-purple-700 py-3 rounded-lg font-medium mb-6 transition-colors">
-            Create New Account
-          </button>
-          <div className="relative flex items-center py-5">
-            <div className="flex-grow border-t border-slate-700"></div>
-            <span className="flex-shrink-0 mx-4 text-slate-500 text-sm">Or Import</span>
-            <div className="flex-grow border-t border-slate-700"></div>
+      <div className="min-h-screen flex flex-col items-center justify-center p-4">
+        <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-5 pointer-events-none"></div>
+        <div className="max-w-md w-full bg-slate-900/40 backdrop-blur-xl border border-white/10 rounded-3xl p-8 shadow-2xl relative z-10">
+          <div className="w-16 h-16 bg-purple-500/20 rounded-2xl flex items-center justify-center mb-6 mx-auto border border-purple-500/30">
+            <ScanLine className="w-8 h-8 text-purple-400" />
           </div>
-          <input 
-            type="text" 
-            placeholder="Paste Private Key (0x...)" 
-            value={privateKeyInput}
-            onChange={(e) => setPrivateKeyInput(e.target.value)}
-            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-4 py-3 mb-4 text-white focus:outline-none focus:border-purple-500"
-          />
-          <button onClick={loginWithKey} className="w-full bg-slate-800 hover:bg-slate-700 py-3 rounded-lg font-medium transition-colors flex items-center justify-center gap-2">
-            <Key className="w-4 h-4" /> Import Account
-          </button>
+          <h2 className="text-3xl font-bold mb-2 text-center brand-text text-white">Merchant POS</h2>
+          <p className="text-slate-400 text-center mb-8 text-sm">Sign in to manage your store terminal.</p>
+          
+          <form onSubmit={handleAuth} className="space-y-4">
+            <div className="relative">
+              <User className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
+              <input 
+                type="text" 
+                placeholder="Username" 
+                required
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full bg-slate-950/50 border border-slate-700/50 rounded-xl pl-12 pr-4 py-3 text-white focus:outline-none focus:border-purple-500 transition-colors"
+              />
+            </div>
+            <div className="relative">
+              <Lock className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-slate-500" />
+              <input 
+                type="password" 
+                placeholder="Password" 
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full bg-slate-950/50 border border-slate-700/50 rounded-xl pl-12 pr-4 py-3 text-white focus:outline-none focus:border-purple-500 transition-colors"
+              />
+            </div>
+            <button type="submit" disabled={authLoading} className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 py-3 rounded-xl font-medium transition-all shadow-lg shadow-purple-900/20 mt-4 flex justify-center items-center gap-2 text-white">
+              {authLoading ? <Activity className="w-5 h-5 animate-spin" /> : (isRegistering ? "Create Account" : "Sign In")}
+            </button>
+          </form>
+
+          <p className="text-center mt-6 text-sm text-slate-400">
+            {isRegistering ? "Already have an account?" : "Need an account?"}{" "}
+            <button onClick={() => setIsRegistering(!isRegistering)} className="text-purple-400 hover:text-purple-300 font-medium">
+              {isRegistering ? "Sign In" : "Register"}
+            </button>
+          </p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans p-4 md:p-8 flex flex-col items-center">
-      <header className="max-w-md w-full flex flex-col items-center text-center mb-6 pb-4 border-b border-slate-800">
-        <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-400 to-pink-500 bg-clip-text text-transparent flex items-center justify-center gap-2">
+    <div className="min-h-screen p-4 md:p-8 flex flex-col items-center relative">
+      <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-5 pointer-events-none"></div>
+      
+      <header className="max-w-md w-full flex flex-col items-center text-center mb-6 pb-6 border-b border-white/5 relative z-10">
+        <div className="w-16 h-16 bg-purple-500/10 rounded-2xl flex items-center justify-center mb-4 border border-purple-500/20">
           <ScanLine className="w-8 h-8 text-purple-400" />
-          Monad Merchant App
+        </div>
+        <h1 className="text-3xl font-bold brand-text text-white mb-2">
+          Monad Terminal
         </h1>
-        <p className="text-slate-400 mt-2 text-sm">Scan offline vouchers and settle online.</p>
+        <div className="bg-slate-900/60 backdrop-blur-md border border-white/5 rounded-xl p-4 w-full mt-2">
+          <div className="flex justify-between items-center mb-1">
+            <span className="text-xs text-slate-500 uppercase tracking-wider">Merchant Profile</span>
+            <span className="text-xs font-bold text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full">{username}</span>
+          </div>
+          <p className="font-mono text-xs text-slate-400 truncate">{merchantWallet.address}</p>
+        </div>
       </header>
 
-      <main className="max-w-md w-full space-y-6">
+      <main className="max-w-md w-full space-y-6 relative z-10">
         
         {/* Merchant Dashboard */}
-        <section className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden">
+        <section className="bg-slate-900/40 backdrop-blur-xl border border-white/10 rounded-3xl p-6 shadow-2xl relative overflow-hidden">
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-emerald-400 to-teal-500"></div>
           <div className="flex justify-between items-center mb-4">
-             <h2 className="text-xl font-semibold flex items-center gap-2">
+             <h2 className="text-xl font-semibold brand-text flex items-center gap-2">
               <Wallet className="w-5 h-5 text-emerald-400" />
               Store Balance
             </h2>
           </div>
-          <div className="bg-slate-950 p-4 rounded-xl border border-slate-800 flex justify-between items-center">
+          <div className="bg-slate-950/50 p-5 rounded-2xl border border-white/5 flex justify-between items-center">
             <span className="text-slate-400">Total Settled</span>
-            <span className="text-3xl font-bold text-white">${balance.toFixed(2)}</span>
-          </div>
-          <div className="mt-4 text-xs text-slate-500 font-mono bg-slate-950 p-2 rounded">
-            Addr: <span className="text-purple-400">{merchantWallet.address}</span>
+            <span className="text-4xl font-bold text-white">${balance.toFixed(2)}</span>
           </div>
         </section>
 
         {/* Point of Sale Section */}
-        <section className="bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-xl relative overflow-hidden flex flex-col">
+        <section className="bg-slate-900/40 backdrop-blur-xl border border-white/10 rounded-3xl p-6 shadow-2xl relative overflow-hidden flex flex-col">
           <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-purple-500 to-pink-500"></div>
           
           <div className="flex items-center justify-between mb-6">
-            <h2 className="text-xl font-semibold flex items-center gap-2">
+            <h2 className="text-xl font-semibold brand-text flex items-center gap-2">
               <ScanLine className="w-5 h-5 text-purple-400" />
               Point of Sale
             </h2>
-            <div className="flex items-center gap-1 text-xs bg-slate-800 px-2 py-1 rounded text-slate-300">
-               {settlementStatus === 'processing' ? <Wifi className="w-3 h-3 text-green-400 animate-pulse" /> : <WifiOff className="w-3 h-3 text-red-400" />}
+            <div className={`flex items-center gap-1.5 text-xs px-3 py-1 rounded-full font-medium border ${settlementStatus === 'processing' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-slate-800 text-slate-400 border-slate-700'}`}>
+               {settlementStatus === 'processing' ? <Wifi className="w-3 h-3 animate-pulse" /> : <WifiOff className="w-3 h-3" />}
               {settlementStatus === 'processing' ? 'Connecting...' : 'Online'}
             </div>
           </div>
 
-          <div className="bg-slate-950 rounded-xl border border-slate-800 p-6 flex flex-col items-center justify-center min-h-[200px] mb-6 relative">
+          <div className="bg-slate-950/50 rounded-2xl border border-white/5 p-6 flex flex-col items-center justify-center min-h-[200px] mb-6 relative">
             {!isScannerOpen ? (
               <button
                 onClick={() => setIsScannerOpen(true)}
                 disabled={scanStatus !== 'idle' && scanStatus !== 'error' && scanStatus !== 'success'}
-                className={`relative overflow-hidden group w-full max-w-xs flex items-center justify-center gap-3 py-4 rounded-xl font-bold transition-all duration-300 ${
-                  scanStatus === 'idle' ? 'bg-purple-600 hover:bg-purple-700 text-white' :
-                  scanStatus === 'scanning' ? 'bg-slate-700 text-slate-300' :
-                  scanStatus === 'success' ? 'bg-green-600 text-white' :
+                className={`relative overflow-hidden group w-full max-w-xs flex items-center justify-center gap-3 py-4 rounded-xl font-bold transition-all duration-300 shadow-lg ${
+                  scanStatus === 'idle' ? 'bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white shadow-purple-900/20' :
+                  scanStatus === 'scanning' ? 'bg-slate-800 text-slate-300' :
+                  scanStatus === 'success' ? 'bg-emerald-600 text-white' :
                   'bg-red-600 text-white'
                 }`}
               >
@@ -218,18 +265,18 @@ export default function MerchantApp() {
                 )}
               </button>
             ) : (
-              <div className="w-full relative overflow-hidden rounded-xl">
+              <div className="w-full relative overflow-hidden rounded-2xl border-4 border-purple-500/30">
                 <Scanner onScan={(text) => handleScan(text)} onError={(e) => console.log(e)} />
                 <button 
                   onClick={() => setIsScannerOpen(false)}
-                  className="absolute top-2 right-2 bg-slate-800/80 text-white p-2 rounded-full backdrop-blur-sm z-50 hover:bg-slate-700"
+                  className="absolute top-3 right-3 bg-slate-900/80 text-white p-2 rounded-full backdrop-blur-md z-50 hover:bg-slate-800 border border-white/10"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
             )}
             
-            <p className="text-xs text-slate-500 mt-4 text-center">
+            <p className="text-xs text-slate-500 mt-4 text-center font-medium">
               Locally cryptographically verifies offline voucher signature.
             </p>
           </div>
@@ -240,24 +287,24 @@ export default function MerchantApp() {
                 <Layers className="w-4 h-4" /> Pending Batch
               </h3>
               <span className="text-sm text-slate-400">
-                Total: <span className="font-bold text-white">${merchantBatch.reduce((sum, v) => sum + v.amount, 0).toFixed(2)}</span>
+                Total: <span className="font-bold text-white text-lg ml-1">${merchantBatch.reduce((sum, v) => sum + v.amount, 0).toFixed(2)}</span>
               </span>
             </div>
             
-            <div className="bg-slate-950 border border-slate-800 rounded-lg flex-1 p-2 overflow-y-auto min-h-[150px] mb-4 space-y-2">
+            <div className="bg-slate-950/50 border border-white/5 rounded-2xl flex-1 p-2 overflow-y-auto min-h-[150px] mb-4 space-y-2">
               {merchantBatch.length === 0 ? (
-                <div className="h-full flex items-center justify-center text-sm text-slate-600">
+                <div className="h-full flex items-center justify-center text-sm text-slate-600 font-medium">
                   No pending offline transactions.
                 </div>
               ) : (
                 merchantBatch.map((tx, idx) => (
-                  <div key={idx} className="bg-slate-900 border border-slate-800 rounded p-3 flex justify-between items-center animate-in fade-in">
+                  <div key={idx} className="bg-slate-900/80 border border-white/5 rounded-xl p-3 flex justify-between items-center animate-in fade-in">
                     <div>
-                      <div className="text-white font-medium">${tx.amount.toFixed(2)}</div>
+                      <div className="text-white font-bold">${tx.amount.toFixed(2)}</div>
                       <div className="text-[10px] text-slate-500 font-mono mt-1 truncate max-w-[150px]">{tx.nonce}</div>
                     </div>
-                    <div className="text-xs bg-emerald-500/10 text-emerald-400 px-2 py-1 rounded border border-emerald-500/20">
-                      Valid Sig
+                    <div className="text-xs bg-emerald-500/10 text-emerald-400 px-2 py-1 rounded-full border border-emerald-500/20 font-medium flex items-center gap-1">
+                      <CheckCircle2 className="w-3 h-3" /> Valid Sig
                     </div>
                   </div>
                 ))
@@ -267,20 +314,20 @@ export default function MerchantApp() {
             <button
               onClick={settleBatch}
               disabled={merchantBatch.length === 0 || settlementStatus === 'processing'}
-              className={`w-full py-3 rounded-lg font-medium flex items-center justify-center gap-2 transition-colors ${
+              className={`w-full py-4 rounded-xl font-medium flex items-center justify-center gap-2 transition-all shadow-lg ${
                 merchantBatch.length === 0 || settlementStatus === 'processing' 
-                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed' 
+                  ? 'bg-slate-800/50 text-slate-500 cursor-not-allowed border border-white/5' 
                   : settlementStatus === 'success'
-                  ? 'bg-green-600 text-white'
+                  ? 'bg-emerald-600 text-white shadow-emerald-900/20'
                   : settlementStatus === 'error'
                   ? 'bg-red-600 text-white'
-                  : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                  : 'bg-emerald-600 hover:bg-emerald-500 text-white shadow-emerald-900/20'
               }`}
             >
-              {settlementStatus === 'idle' && <><Send className="w-4 h-4" /> Settle Batch (Online)</>}
-              {settlementStatus === 'processing' && <><Layers className="w-4 h-4 animate-bounce" /> Submitting to Monad...</>}
-              {settlementStatus === 'success' && <><CheckCircle2 className="w-4 h-4" /> Settlement Complete!</>}
-              {settlementStatus === 'error' && <><AlertCircle className="w-4 h-4" /> Settlement Failed</>}
+              {settlementStatus === 'idle' && <><Send className="w-5 h-5" /> Settle Batch on Monad</>}
+              {settlementStatus === 'processing' && <><Layers className="w-5 h-5 animate-bounce" /> Submitting to Contract...</>}
+              {settlementStatus === 'success' && <><CheckCircle2 className="w-5 h-5" /> Settlement Complete!</>}
+              {settlementStatus === 'error' && <><AlertCircle className="w-5 h-5" /> Settlement Failed</>}
             </button>
           </div>
         </section>
