@@ -87,13 +87,16 @@ app.post("/api/unlock", (req, res) => {
 // Endpoint to receive the merchant batch and settle on-chain
 app.post("/api/settle", async (req, res) => {
   try {
-    const { batch } = req.body;
+    const { batch, merchantAddress } = req.body;
     
     if (!batch || !Array.isArray(batch) || batch.length === 0) {
       return res.status(400).json({ error: "Invalid or empty batch" });
     }
+    if (!merchantAddress) {
+      return res.status(400).json({ error: "Merchant address required" });
+    }
 
-    console.log(`Received batch of ${batch.length} vouchers for settlement.`);
+    console.log(`Received batch of ${batch.length} vouchers for settlement to ${merchantAddress}`);
 
     let totalSettled = 0;
 
@@ -109,10 +112,14 @@ app.post("/api/settle", async (req, res) => {
       }
     }
 
+    // Credit the merchant
+    if (wallets[merchantAddress] === undefined) wallets[merchantAddress] = 0;
+    wallets[merchantAddress] += totalSettled;
+
     return res.json({ 
       success: true, 
       txHash: "0x" + Math.random().toString(16).slice(2, 66), // Fake tx hash
-      message: `Successfully settled batch on Monad. Total processed: $${totalSettled}`
+      message: `Successfully settled batch. Total processed: $${totalSettled} added to your account!`
     });
 
   } catch (error) {
