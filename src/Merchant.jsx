@@ -60,7 +60,7 @@ export default function MerchantApp() {
     setSettlementStatus('processing');
 
     try {
-      const response = await fetch("/api/settle", {
+      const response = await fetch("https://monad-b768.onrender.com/api/settle", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ batch: merchantBatch })
