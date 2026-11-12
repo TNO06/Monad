@@ -128,6 +128,7 @@ export default function PayerApp() {
 
   const toggleOnlineMode = async () => {
     setErrorMessage("");
+    setSuccessMessage("");
     if (isOnline) {
       const numLock = Number(lockInput);
       if (numLock <= 0 || numLock > balance) {
@@ -155,6 +156,16 @@ export default function PayerApp() {
           setAllowanceAmount(0);
           setIsOnline(true);
           setVoucher(null);
+          
+          // Show auto-refund details if expired lock refunded unsettled vouchers
+          if (data.expired && data.autoRefunded > 0) {
+            setSuccessMessage(
+              `Vault unlocked! $${Number(data.refunded).toFixed(2)} refunded to your balance ` +
+              `(including $${Number(data.autoRefunded).toFixed(2)} auto-recovered from expired unsettled vouchers).`
+            );
+          } else {
+            setSuccessMessage(`Vault unlocked! $${Number(data.refunded || allowanceAmount).toFixed(2)} refunded to your on-chain balance.`);
+          }
         } else {
           setErrorMessage(data.error || "Unlock failed");
         }
@@ -389,6 +400,17 @@ export default function PayerApp() {
               <span>{errorMessage}</span>
             </div>
             <button onClick={() => setErrorMessage("")} className="text-zinc-500 hover:text-zinc-300 text-xs ml-2">Dismiss</button>
+          </div>
+        )}
+
+        {/* Success Banner (auto-refund notifications etc.) */}
+        {successMessage && (
+          <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 text-xs flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400" />
+              <span>{successMessage}</span>
+            </div>
+            <button onClick={() => setSuccessMessage("")} className="text-zinc-500 hover:text-zinc-300 text-xs ml-2">Dismiss</button>
           </div>
         )}
 

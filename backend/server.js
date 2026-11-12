@@ -257,10 +257,18 @@ app.post("/api/unlock", async (req, res) => {
     }
   }
 
+  // In-memory fallback (no expiry tracking, simple refund)
   if (allowances[address] !== undefined) {
-    wallets[address] += Number(remainingAmount);
+    const refundAmount = allowances[address]; // Refund all locked funds
+    wallets[address] += refundAmount;
     allowances[address] = 0;
-    return res.json({ success: true, balance: wallets[address] });
+    return res.json({ 
+      success: true, 
+      balance: wallets[address],
+      refunded: refundAmount,
+      autoRefunded: Math.max(0, refundAmount - Number(remainingAmount)),
+      expired: false
+    });
   } else {
     return res.status(400).json({ success: false, error: "No allowance to unlock" });
   }

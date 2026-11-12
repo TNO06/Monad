@@ -188,7 +188,11 @@ export async function lockFunds(address, amount) {
 }
 
 /**
- * Refund unspent offline allowance back to on-chain balance
+ * Refund unspent offline allowance back to on-chain balance.
+ * If the lock has expired (>1 hour), the server auto-refunds ALL remaining
+ * locked funds — including unsettled voucher amounts the merchant never claimed.
+ * 
+ * Returns: { success, balance, refunded, autoRefunded, expired }
  */
 export async function unlockFunds(address, remainingAmount) {
   if (isSupabaseConfigured) {

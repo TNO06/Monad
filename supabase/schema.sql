@@ -20,6 +20,7 @@ CREATE TABLE users (
   private_key TEXT NOT NULL,
   balance NUMERIC(18, 4) NOT NULL DEFAULT 0,
   locked NUMERIC(18, 4) NOT NULL DEFAULT 0,
+  locked_at TIMESTAMPTZ DEFAULT NULL, -- Timestamp when funds were locked (for expiry-based auto-refund)
   role TEXT NOT NULL DEFAULT 'user', -- 'user' | 'merchant' | 'admin'
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -69,7 +70,8 @@ BEGIN
 
   UPDATE users 
   SET balance = balance - p_amount,
-      locked = locked + p_amount
+      locked = locked + p_amount,
+      locked_at = now()
   WHERE LOWER(address) = LOWER(p_address)
   RETURNING balance, locked INTO v_new_bal, v_new_locked;
 
@@ -81,23 +83,51 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
--- Procedure: Unlock / refund offline allowance
+-- Procedure: Unlock / refund offline allowance (expiry-aware)
+-- If lock expired (>1 hour), refunds ALL remaining locked funds including
+-- unsettled voucher amounts the merchant never claimed.
 CREATE OR REPLACE FUNCTION unlock_allowance(p_address TEXT, p_remaining NUMERIC)
 RETURNS JSONB AS $$
 DECLARE
+  v_locked NUMERIC;
+  v_locked_at TIMESTAMPTZ;
+  v_refund NUMERIC;
+  v_auto_refunded NUMERIC;
   v_new_bal NUMERIC;
 BEGIN
-  UPDATE users 
-  SET balance = balance + p_remaining,
-      locked = 0
+  SELECT locked, locked_at INTO v_locked, v_locked_at
+  FROM users
   WHERE LOWER(address) = LOWER(p_address)
-  RETURNING balance INTO v_new_bal;
+  FOR UPDATE;
 
   IF NOT FOUND THEN
     RETURN jsonb_build_object('success', false, 'error', 'Wallet not found');
   END IF;
 
-  RETURN jsonb_build_object('success', true, 'balance', v_new_bal);
+  -- If lock expired (older than 1 hour), refund ALL remaining locked funds
+  IF v_locked_at IS NOT NULL AND v_locked_at < (now() - INTERVAL '1 hour') THEN
+    v_refund := v_locked;
+    v_auto_refunded := GREATEST(0, v_locked - p_remaining);
+  ELSE
+    -- Lock still valid: only refund what client says is remaining
+    v_refund := LEAST(p_remaining, v_locked);
+    v_auto_refunded := 0;
+  END IF;
+
+  UPDATE users
+  SET balance = balance + v_refund,
+      locked = locked - v_refund,
+      locked_at = NULL
+  WHERE LOWER(address) = LOWER(p_address)
+  RETURNING balance INTO v_new_bal;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'balance', v_new_bal,
+    'refunded', v_refund,
+    'autoRefunded', v_auto_refunded,
+    'expired', (v_locked_at IS NOT NULL AND v_locked_at < (now() - INTERVAL '1 hour'))
+  );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
@@ -150,6 +180,49 @@ BEGIN
   );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- ====================================================================
+-- EXPIRY-BASED AUTO-REFUND SWEEP (pg_cron)
+-- ====================================================================
+
+-- Sweep function: auto-refund ALL users whose locks have expired (>1 hour)
+-- Runs on a cron schedule for cases where payer never reconnects
+CREATE OR REPLACE FUNCTION sweep_expired_locks()
+RETURNS JSONB AS $$
+DECLARE
+  v_count INTEGER := 0;
+  v_total_refunded NUMERIC := 0;
+  r RECORD;
+BEGIN
+  FOR r IN 
+    SELECT id, locked 
+    FROM users 
+    WHERE locked > 0 
+      AND locked_at IS NOT NULL 
+      AND locked_at < (now() - INTERVAL '1 hour')
+    FOR UPDATE
+  LOOP
+    UPDATE users 
+    SET balance = balance + r.locked,
+        locked = 0,
+        locked_at = NULL
+    WHERE id = r.id;
+    
+    v_total_refunded := v_total_refunded + r.locked;
+    v_count := v_count + 1;
+  END LOOP;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'usersRefunded', v_count,
+    'totalRefunded', v_total_refunded
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- Enable pg_cron and schedule sweep every 10 minutes
+CREATE EXTENSION IF NOT EXISTS pg_cron;
+SELECT cron.schedule('sweep-expired-locks', '*/10 * * * *', $$SELECT sweep_expired_locks()$$);
 
 -- ====================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
