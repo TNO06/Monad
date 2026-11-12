@@ -21,7 +21,7 @@ const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || "0x00000000000000000000
 const contractAbi = [
   "function settleVouchers(tuple(uint256 amount, string nonce, uint256 expiry, bytes signature)[] vouchers) external"
 ];
-const monadPayContract = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, merchantWallet);
+const _monadPayContract = new ethers.Contract(CONTRACT_ADDRESS, contractAbi, merchantWallet);
 
 // Simple logging middleware
 app.use((req, res, next) => {
