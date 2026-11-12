@@ -23,8 +23,13 @@ import { ethers } from 'ethers';
 import QRCode from 'react-qr-code';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
-
-const BACKEND_URL = import.meta.env.PROD ? "https://monad-b768.onrender.com" : "";
+import { 
+  registerUser, 
+  loginUser, 
+  getAccount, 
+  lockFunds, 
+  unlockFunds 
+} from './services/api';
 
 export default function PayerApp() {
   const [payerWallet, setPayerWallet] = useState(null);
@@ -60,12 +65,7 @@ export default function PayerApp() {
     if (!payerWallet) return;
     if (manual) setIsRefreshing(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/account`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address: payerWallet.address })
-      });
-      const data = await res.json();
+      const data = await getAccount(payerWallet.address);
       setBalance(Number(data.balance || 0));
       if (data.locked !== undefined) {
         setAllowanceAmount(Number(data.locked || 0));
@@ -88,19 +88,15 @@ export default function PayerApp() {
     setAuthLoading(true);
     setErrorMessage("");
     setSuccessMessage("");
-    const endpoint = isRegistering ? "/api/register" : "/api/login";
     
     try {
-      const res = await fetch(`${BACKEND_URL}${endpoint}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password })
-      });
-      const data = await res.json();
+      const data = isRegistering 
+        ? await registerUser(username, password)
+        : await loginUser(username, password);
       
       if (data.success) {
         if (isRegistering) {
-          setSuccessMessage("Account created successfully! Please sign in.");
+          setSuccessMessage(data.message || "Account created successfully! Please sign in.");
           setIsRegistering(false);
         } else {
           const wallet = new ethers.Wallet(data.privateKey);
@@ -110,7 +106,7 @@ export default function PayerApp() {
         setErrorMessage(data.error || "Authentication failed");
       }
     } catch {
-      setErrorMessage("Could not reach backend server. Please verify connection.");
+      setErrorMessage("Could not connect to database. Please check configuration.");
     } finally {
       setAuthLoading(false);
     }
@@ -139,12 +135,7 @@ export default function PayerApp() {
         return;
       }
       try {
-        const res = await fetch(`${BACKEND_URL}/api/lock`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ address: payerWallet.address, amount: numLock })
-        });
-        const data = await res.json();
+        const data = await lockFunds(payerWallet.address, numLock);
         if (data.success) {
           setBalance(data.balance);
           setAllowanceAmount(numLock);
@@ -158,17 +149,14 @@ export default function PayerApp() {
       }
     } else {
       try {
-        const res = await fetch(`${BACKEND_URL}/api/unlock`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ address: payerWallet.address, remainingAmount: allowanceAmount })
-        });
-        const data = await res.json();
+        const data = await unlockFunds(payerWallet.address, allowanceAmount);
         if (data.success) {
           setBalance(data.balance);
           setAllowanceAmount(0);
           setIsOnline(true);
           setVoucher(null);
+        } else {
+          setErrorMessage(data.error || "Unlock failed");
         }
       } catch {
         setErrorMessage("Error refunding allowance. Please verify connection.");

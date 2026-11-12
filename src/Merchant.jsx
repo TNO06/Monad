@@ -22,8 +22,12 @@ import { ethers } from 'ethers';
 import { Scanner } from '@yudiel/react-qr-scanner';
 import Navbar from './components/Navbar';
 import Footer from './components/Footer';
-
-const BACKEND_URL = import.meta.env.PROD ? "https://monad-b768.onrender.com" : "";
+import { 
+  registerUser, 
+  loginUser, 
+  getAccount, 
+  settleBatch as settleBatchApi 
+} from './services/api';
 
 export default function MerchantApp() {
   const [merchantWallet, setMerchantWallet] = useState(null);
@@ -54,12 +58,7 @@ export default function MerchantApp() {
     if (!merchantWallet) return;
     if (manual) setIsRefreshing(true);
     try {
-      const res = await fetch(`${BACKEND_URL}/api/account`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address: merchantWallet.address })
-      });
-      const data = await res.json();
+      const data = await getAccount(merchantWallet.address);
       setBalance(Number(data.balance || 0));
     } catch (err) {
       console.error("Failed to fetch balance", err);
@@ -79,19 +78,15 @@ export default function MerchantApp() {
     setAuthLoading(true);
     setErrorMessage("");
     setSuccessMessage("");
-    const endpoint = isRegistering ? "/api/register" : "/api/login";
     
     try {
-      const res = await fetch(`${BACKEND_URL}${endpoint}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password })
-      });
-      const data = await res.json();
+      const data = isRegistering 
+        ? await registerUser(username, password)
+        : await loginUser(username, password);
       
       if (data.success) {
         if (isRegistering) {
-          setSuccessMessage("Merchant store registered! Please log in.");
+          setSuccessMessage(data.message || "Merchant store registered! Please log in.");
           setIsRegistering(false);
         } else {
           const wallet = new ethers.Wallet(data.privateKey);
@@ -101,7 +96,7 @@ export default function MerchantApp() {
         setErrorMessage(data.error || "Authentication failed");
       }
     } catch {
-      setErrorMessage("Could not reach backend server. Please verify connection.");
+      setErrorMessage("Could not connect to database. Please check configuration.");
     } finally {
       setAuthLoading(false);
     }
@@ -195,12 +190,7 @@ export default function MerchantApp() {
     setErrorMessage("");
 
     try {
-      const response = await fetch(`${BACKEND_URL}/api/settle`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ batch: merchantBatch, merchantAddress: merchantWallet.address })
-      });
-      const data = await response.json();
+      const data = await settleBatchApi(merchantBatch, merchantWallet.address);
       
       if (data.success) {
         setMerchantBatch([]);

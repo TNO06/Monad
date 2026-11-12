@@ -16,8 +16,11 @@ import {
   Lock
 } from 'lucide-react';
 import Footer from './components/Footer';
-
-const BACKEND_URL = import.meta.env.PROD ? "https://monad-b768.onrender.com" : "";
+import { 
+  adminGetUsers, 
+  adminFundUser, 
+  adminDeleteUser 
+} from './services/api';
 
 export default function AdminApp() {
   const [password, setPassword] = useState("");
@@ -33,12 +36,7 @@ export default function AdminApp() {
     setLoading(true);
     setStatusMessage({ text: "", type: "" });
     try {
-      const res = await fetch(`${BACKEND_URL}/api/admin/users`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ adminPassword: password })
-      });
-      const data = await res.json();
+      const data = await adminGetUsers(password);
       if (data.success) {
         setUsers(data.users);
         setIsAuthenticated(true);
@@ -47,7 +45,7 @@ export default function AdminApp() {
         setIsAuthenticated(false);
       }
     } catch {
-      setStatusMessage({ text: "Failed to connect to backend server", type: "error" });
+      setStatusMessage({ text: "Failed to connect to backend", type: "error" });
     } finally {
       setLoading(false);
     }
@@ -66,12 +64,7 @@ export default function AdminApp() {
     }
 
     try {
-      const res = await fetch(`${BACKEND_URL}/api/admin/fund`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ adminPassword: password, username, amount })
-      });
-      const data = await res.json();
+      const data = await adminFundUser(password, username, amount);
       if (data.success) {
         setStatusMessage({ text: `Funded ${username} balance to $${data.newBalance}`, type: "success" });
         setFundInputs(prev => ({ ...prev, [username]: "" }));
@@ -87,12 +80,7 @@ export default function AdminApp() {
   const deleteUser = async (username) => {
     if (!window.confirm(`Are you sure you want to permanently delete user "${username}"?`)) return;
     try {
-      const res = await fetch(`${BACKEND_URL}/api/admin/delete`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ adminPassword: password, username })
-      });
-      const data = await res.json();
+      const data = await adminDeleteUser(password, username);
       if (data.success) {
         setStatusMessage({ text: `User ${username} deleted successfully`, type: "success" });
         fetchUsers();

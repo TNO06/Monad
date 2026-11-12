@@ -2,22 +2,22 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const { ethers } = require("ethers");
+const { createClient } = require("@supabase/supabase-js");
 
 const app = express();
 app.use(cors());
 app.use(express.json());
 
 // Set up Monad Provider and Wallet
-// For hackathon, we use a testnet or local node URL
 const MONAD_RPC_URL = process.env.MONAD_RPC_URL || "https://testnet-rpc.monad.xyz/"; 
 const provider = new ethers.JsonRpcProvider(MONAD_RPC_URL);
 
 // The Merchant's private key to submit the settled batch
-const MERCHANT_PRIVATE_KEY = process.env.MERCHANT_PRIVATE_KEY || "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"; // Default anvil account 0 for local dev if needed
+const MERCHANT_PRIVATE_KEY = process.env.MERCHANT_PRIVATE_KEY || "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"; 
 const merchantWallet = new ethers.Wallet(MERCHANT_PRIVATE_KEY, provider);
 
 // Contract address & ABI
-const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || "0x0000000000000000000000000000000000000000"; // Update after deployment
+const CONTRACT_ADDRESS = process.env.CONTRACT_ADDRESS || "0x0000000000000000000000000000000000000000"; 
 const contractAbi = [
   "function settleVouchers(tuple(uint256 amount, string nonce, uint256 expiry, bytes signature)[] vouchers) external"
 ];
@@ -29,45 +29,96 @@ app.use((req, res, next) => {
   next();
 });
 
-// Simple in-memory database for hackathon simulation
-let users = {}; // username -> { password, address, privateKey, role }
-let wallets = {}; // address -> balance
-let allowances = {}; // address -> lockedAmount
+// Optional Supabase DB Connection
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+const supabase = (supabaseUrl && supabaseKey && supabaseUrl.startsWith("https://")) 
+  ? createClient(supabaseUrl, supabaseKey) 
+  : null;
+
+if (supabase) {
+  console.log("⚡ Supabase database connection enabled on backend.");
+} else {
+  console.log("ℹ️  Running in-memory simulation mode (provide SUPABASE_URL & SUPABASE_KEY to persist).");
+}
+
+// In-memory database fallback
+let users = {}; 
+let wallets = {}; 
+let allowances = {}; 
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "monadadmin";
 
-// Create an admin user by default for testing
+// Create an admin user by default for testing in-memory
 const adminWallet = ethers.Wallet.createRandom();
 users["admin"] = { password: "password", address: adminWallet.address, privateKey: adminWallet.privateKey, role: "admin" };
 wallets[adminWallet.address] = 999999;
 allowances[adminWallet.address] = 0;
 
 // Endpoint to register a new user
-app.post("/api/register", (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) return res.status(400).json({ error: "Username and password required" });
-  if (users[username]) return res.status(400).json({ error: "Username already exists" });
+app.post("/api/register", async (req, res) => {
+  const { username, password: userPassword } = req.body;
+  if (!username || !userPassword) return res.status(400).json({ error: "Username and password required" });
 
   const wallet = ethers.Wallet.createRandom();
+
+  if (supabase) {
+    try {
+      const { data: existing } = await supabase.from('users').select('username').eq('username', username.trim()).maybeSingle();
+      if (existing) return res.status(400).json({ error: "Username already exists" });
+
+      const { error: insertErr } = await supabase.from('users').insert({
+        username: username.trim(),
+        password: userPassword,
+        address: wallet.address,
+        private_key: wallet.privateKey,
+        balance: 100,
+        locked: 0,
+        role: "user"
+      });
+      if (insertErr) return res.status(500).json({ error: insertErr.message });
+      return res.json({ success: true, message: "Account created successfully with $100 starting balance!" });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
+  if (users[username]) return res.status(400).json({ error: "Username already exists" });
   users[username] = {
-    password,
+    password: userPassword,
     address: wallet.address,
     privateKey: wallet.privateKey,
     role: "user"
   };
-  
-  wallets[wallet.address] = 0; // Starts with 0. Admin must fund.
+  wallets[wallet.address] = 100;
   allowances[wallet.address] = 0;
 
   return res.json({ success: true, message: "Account created successfully!" });
 });
 
 // Endpoint to login
-app.post("/api/login", (req, res) => {
-  const { username, password } = req.body;
+app.post("/api/login", async (req, res) => {
+  const { username, password: userPassword } = req.body;
+
+  if (supabase) {
+    try {
+      const { data: user, error } = await supabase.from('users').select('*').eq('username', username.trim()).maybeSingle();
+      if (error || !user || user.password !== userPassword) {
+        return res.status(401).json({ error: "Invalid username or password" });
+      }
+      return res.json({
+        success: true,
+        address: user.address,
+        privateKey: user.private_key,
+        role: user.role || 'user'
+      });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
   const user = users[username];
-  
-  if (!user || user.password !== password) {
+  if (!user || user.password !== userPassword) {
     return res.status(401).json({ error: "Invalid username or password" });
   }
 
@@ -79,19 +130,38 @@ app.post("/api/login", (req, res) => {
   });
 });
 
-// Endpoint to get account details (balance & allowance)
-app.post("/api/account", (req, res) => {
+// Endpoint to get account details
+app.post("/api/account", async (req, res) => {
   const { address } = req.body;
   if (!address) return res.status(400).json({ error: "Address required" });
+
+  if (supabase) {
+    try {
+      const { data: user } = await supabase.from('users').select('balance, locked').ilike('address', address).maybeSingle();
+      return res.json({ balance: Number(user?.balance || 0), locked: Number(user?.locked || 0) });
+    } catch {
+      return res.json({ balance: 0, locked: 0 });
+    }
+  }
+
   return res.json({ balance: wallets[address] || 0, locked: allowances[address] || 0 });
 });
 
 // --- ADMIN ENDPOINTS ---
 
-// Get all users
-app.post("/api/admin/users", (req, res) => {
+app.post("/api/admin/users", async (req, res) => {
   const { adminPassword } = req.body;
   if (adminPassword !== ADMIN_PASSWORD) return res.status(401).json({ error: "Unauthorized" });
+
+  if (supabase) {
+    try {
+      const { data: list, error } = await supabase.from('users').select('username, address, balance, locked, role').order('created_at', { ascending: false });
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json({ success: true, users: list });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
 
   const userList = Object.keys(users).map(username => {
     const u = users[username];
@@ -103,15 +173,23 @@ app.post("/api/admin/users", (req, res) => {
       role: u.role
     };
   });
-
   return res.json({ success: true, users: userList });
 });
 
-// Fund a user (Admin only)
-app.post("/api/admin/fund", (req, res) => {
+app.post("/api/admin/fund", async (req, res) => {
   const { adminPassword, username, amount } = req.body;
   if (adminPassword !== ADMIN_PASSWORD) return res.status(401).json({ error: "Unauthorized" });
-  
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.from('users').update({ balance: Number(amount) }).eq('username', username).select('balance').single();
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json({ success: true, newBalance: Number(data.balance) });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
   const user = users[username];
   if (!user) return res.status(404).json({ error: "User not found" });
 
@@ -119,29 +197,44 @@ app.post("/api/admin/fund", (req, res) => {
   return res.json({ success: true, newBalance: wallets[user.address] });
 });
 
-// Delete a user (Admin only)
-app.post("/api/admin/delete", (req, res) => {
+app.post("/api/admin/delete", async (req, res) => {
   const { adminPassword, username } = req.body;
   if (adminPassword !== ADMIN_PASSWORD) return res.status(401).json({ error: "Unauthorized" });
-  
+
+  if (supabase) {
+    try {
+      const { error } = await supabase.from('users').delete().eq('username', username);
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json({ success: true });
+    } catch (e) {
+      return res.status(500).json({ error: e.message });
+    }
+  }
+
   const user = users[username];
   if (!user) return res.status(404).json({ error: "User not found" });
-  
-  // Clean up
   delete wallets[user.address];
   delete allowances[user.address];
   delete users[username];
-  
   return res.json({ success: true });
 });
 
 // --- PAYMENT ENDPOINTS ---
 
-// Endpoint to lock allowance for offline use
-app.post("/api/lock", (req, res) => {
+app.post("/api/lock", async (req, res) => {
   const { address, amount } = req.body;
   const lockAmount = Number(amount);
-  
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.rpc('lock_allowance', { p_address: address, p_amount: lockAmount });
+      if (error) return res.status(400).json({ success: false, error: error.message });
+      return res.json(data);
+    } catch (e) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  }
+
   if (wallets[address] >= lockAmount) {
     wallets[address] -= lockAmount;
     allowances[address] = (allowances[address] || 0) + lockAmount;
@@ -151,10 +244,19 @@ app.post("/api/lock", (req, res) => {
   }
 });
 
-// Endpoint to refund unused offline allowance
-app.post("/api/unlock", (req, res) => {
+app.post("/api/unlock", async (req, res) => {
   const { address, remainingAmount } = req.body;
-  
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.rpc('unlock_allowance', { p_address: address, p_remaining: Number(remainingAmount) });
+      if (error) return res.status(400).json({ success: false, error: error.message });
+      return res.json(data);
+    } catch (e) {
+      return res.status(500).json({ success: false, error: e.message });
+    }
+  }
+
   if (allowances[address] !== undefined) {
     wallets[address] += Number(remainingAmount);
     allowances[address] = 0;
@@ -164,11 +266,9 @@ app.post("/api/unlock", (req, res) => {
   }
 });
 
-// Endpoint to receive the merchant batch and settle on-chain
 app.post("/api/settle", async (req, res) => {
   try {
     const { batch, merchantAddress } = req.body;
-    
     if (!batch || !Array.isArray(batch) || batch.length === 0) {
       return res.status(400).json({ error: "Invalid or empty batch" });
     }
@@ -176,14 +276,16 @@ app.post("/api/settle", async (req, res) => {
       return res.status(400).json({ error: "Merchant address required" });
     }
 
-    console.log(`Received batch of ${batch.length} vouchers for settlement to ${merchantAddress}`);
+    if (supabase) {
+      const { data, error } = await supabase.rpc('settle_voucher_batch', { p_merchant: merchantAddress, p_vouchers: batch });
+      if (error) return res.status(500).json({ error: error.message });
+      return res.json(data);
+    }
 
     let totalSettled = 0;
-
     for (const v of batch) {
       const payer = v.payerAddress;
       const amount = Number(v.amount);
-      
       if (allowances[payer] !== undefined && allowances[payer] >= amount) {
         allowances[payer] -= amount;
         totalSettled += amount;
@@ -198,9 +300,7 @@ app.post("/api/settle", async (req, res) => {
       txHash: "0x" + Math.random().toString(16).slice(2, 66),
       message: `Successfully settled batch. Total processed: $${totalSettled} added to your account!`
     });
-
   } catch (error) {
-    console.error("Error settling batch:", error);
     return res.status(500).json({ error: "Settlement failed", details: error.message });
   }
 });
